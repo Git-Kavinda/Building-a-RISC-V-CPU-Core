@@ -45,8 +45,12 @@
    
    // YOUR CODE HERE
    // ...
-   $next_pc[31:0] = $reset? 32'b0: $pc[31:0]+4;
    $pc[31:0] = >>1$next_pc;
+   $next_pc[31:0] = $reset ? 32'b0 : 
+                    $taken_br ? $br_tgt_pc :
+                    $is_jal ? $br_tgt_pc :
+                    $is_jalr ? $jalr_tgt_pc :
+                    ($pc[31:0] + 32'd4);
    
    `READONLY_MEM($pc[31:0], $$instr[31:0])
    
@@ -57,7 +61,7 @@
    $is_s_instr = $instr[6:2] ==? 5'b0100x;
    $is_b_instr = $instr[6:2] == 5'b11000;
    $is_j_instr = $instr[6:2] == 5'b11011;
-   
+   $is_load = ($opcode ==? 7'b0x00011); 
    //Getting Fields
    $rs2[4:0] = $instr[24:20];
    $funct7[6:0] = $instr[31:25];
@@ -80,7 +84,6 @@
                 32'b0 ;
    // Decoding the Instruction
    $dec_bits[10:0] = {$funct7[5], $funct3, $opcode};
-   
    $is_beq = $dec_bits ==? 11'bx0001100011;
    $is_bne = $dec_bits ==? 11'bx0011100011;
    $is_blt = $dec_bits ==? 11'bx1001100011;
@@ -111,14 +114,64 @@
    $is_jal = $dec_bits ==? 11'bxxxx1101111;
    $is_jalr = $dec_bits ==? 11'bx0001100111;
    
+   $sltu_rslt[31:0] = {31'b0, $src1_value < $src2_value};
+   $sltiu_rslt[31:0] = {31'b0, $src1_value < $imm};
+   $sext_src1[63:0] = {{32{$src1_value[31]}}, $src1_value};
+   $sra_rslt[63:0] = $sext_src1 >> $src2_value[4:0];
+   $srai_rslt[63:0] = $sext_src1 >> $imm[4:0];
    
+   //ALU
+   $result[31:0] = $is_addi ? $src1_value + $imm:
+                   $is_add ? $src1_value[31:0] + $src2_value[31:0]:
+                   $is_andi ? $src1_value & $imm:
+                   $is_ori ? $src1_value | $imm:
+                   $is_xori ? $src1_value ^ $imm:
+                   $is_addi ? $src1_value + $imm:
+                   $is_slli ? $src1_value << $imm[5:0]:
+                   $is_srli ? $src1_value >> $imm[5:0]:
+                   $is_and ? $src1_value & $src2_value:
+                   $is_or ? $src1_value | $src2_value:
+                   $is_xor ? $src1_value ^ $src2_value:
+                   $is_add ? $src1_value + $src2_value:
+                   $is_sub ? $src1_value - $src2_value:
+                   $is_sll ? $src1_value << $src2_value:
+                   $is_srl ? $src1_value >> $src2_value:
+                   $is_sltu ? $sltu_rslt:
+                   $is_sltiu ? $sltiu_rslt:
+                   $is_lui ? {$imm[31:12], 12'b0}:
+                   $is_auipc ? $pc + {$imm[31:12], 12'b0}:
+                   $is_jal ? $pc + 32'd4:
+                   $is_jalr ? $pc + 32'd4:
+                   $is_slt ? (($src1_value[31] == $src2_value[31]) ? $sltu_rslt : {31'b0, $src1_value[31]}):
+                   $is_slti ? (($src1_value[31] == $imm[31]) ? $sltu_rslt : {31'b0, $src1_value[31]}):
+                   $is_sra ? $sra_rslt[31:0]:
+                   $is_srai ? $srai_rslt[31:0]:
+                   ($is_load || $is_s_instr) ? $src1_value + $imm:
+                   32'b0;
+                   
+   $result_write_rf[31:0] = $is_load ? $ld_data[31:0] : $result;
+   
+   //branch logic
+    $taken_br = $is_beq ? ($src1_value == $src2_value ? 1'b1 : 1'b0) :
+               $is_bne ? ($src1_value != $src2_value ? 1'b1 : 1'b0) :
+               $is_blt ? (($src1_value < $src2_value) ^ ($src1_value[31] != $src2_value[31]) ? 1'b1 : 1'b0) :
+               $is_bge ? (($src1_value >= $src2_value) ^ ($src1_value[31] != $src2_value[31]) ? 1'b1 : 1'b0) :
+               $is_bltu ? ($src1_value < $src2_value ? 1'b1 : 1'b0) :
+               $is_bgeu ? ($src1_value >= $src2_value ? 1'b1 : 1'b0) :
+               1'b0 ;
+   //location setting
+   $br_tgt_pc[31:0] = $pc[31:0] + $imm ; 
+   $jalr_tgt_pc[31:0] = $src1_value + $imm;
+   
+   
+               
    
    // Assert these to end simulation (before Makerchip cycle limit).
    *passed = 1'b0;
    *failed = *cyc_cnt > M4_MAX_CYC;
    
    m4+rf(32, 32, $reset, $rd_valid, $rd[4:0], $result_write_rf[31:0], $rs1_valid, $rs1, $src1_value, $rs2_valid, $rs2, $src2_value)
-   //m4+dmem(32, 32, $reset, $addr[4:0], $wr_en, $wr_data[31:0], $rd_en, $rd_data)
+   m4+dmem(32, 32, $reset, $addr[4:0], $wr_en, $wr_data[31:0], $rd_en, $rd_data)
    m4+cpu_viz()
 \SV
    endmodule
